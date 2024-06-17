@@ -1,10 +1,11 @@
 
 ---
 - name: Deploy OpenVPN WEB GUI with Docker Compose
-  hosts: ovpn_servers
+  hosts: all 
   become: true
   vars:
-    compose_file: /root/openvpn-ui/docker-compose.yml
+    ovpn_src: /root/openvpn-ui
+    compose_file: "{{ ovpn_src }}/docker-compose.yml"
 
   tasks:
     - name: Install general prerequisites
@@ -66,7 +67,7 @@
 
     - name: Create openvpn-ui folder
       file:
-        path: /root/openvpn-ui
+        path: "{{ ovpn_src }}"
         state: directory
         
     - name: Copy Docker Compose file
@@ -74,17 +75,16 @@
         src: ./templates/docker-compose.yml.j2
         dest: "{{ compose_file }}"
       when: bashrc_credentials.rc != 0
-      notify: Restart Docker Compose
 
     - name: Touch fw-rules.sh file
       file:
-        path: ./fw-rules.sh
+        path: "{{ ovpn_src}}/fw-rules.sh"
         state: touch
 
     - name: Copy server.conf 
       template:
         src: ./templates/openvpn-server.conf.j2
-        dest: /root/server.conf
+        dest: "{{ ovpn_src}}/server.conf"
 
     - name: Add OpenVPN credentials to /root/.bashrc
       lineinfile:
@@ -95,14 +95,12 @@
           echo "Password: {{ openvpn_admin_password }}"
           echo "To remove this msg, remove the lines in ~/.bashrc"
       when: bashrc_credentials.rc != 0
-        
 
     - name: Pull latest images and bring up services
       community.docker.docker_compose_v2:
         project_src: "{{ compose_file | dirname }}"
         pull: missing
         recreate: auto
-      notify: Restart Docker Compose
 
     - name: Copy easy-rsa vars before initializing PKI
       community.docker.docker_container_exec:
@@ -117,33 +115,27 @@
         
     - name: Check if database file exists
       stat:
-        path: /root/db/data.db
+        path: "{{ ovpn_src}}/db/data.db"
       register: db_file
 
     - name: Wait for the database file to be created and populated
       wait_for:
-        path: /root/db/data.db
+        path: "{{ ovpn_src}}/db/data.db"
         state: present
         timeout: 300
       when: not db_file.stat.exists
 
 
     - name: Check if database is populated
-      command: "sqlite3 /root/db/data.db 'SELECT count(*) FROM o_v_client_config;'"
+      command: "sqlite3 {{ ovpn_src}}/db/data.db 'SELECT count(*) FROM o_v_client_config;'"
       register: db_check
       changed_when: db_check.stdout == "0"
 
     - name: Wait for the database to be populated
-      command: "sh -c 'while ! sqlite3 /root/db/data.db \"SELECT count(*) FROM o_v_client_config;\" | grep -q \"^[1-9]\"; do sleep 5; done'"
+      command: "sh -c 'while ! sqlite3 {{ ovpn_src}}/db/data.db \"SELECT count(*) FROM o_v_client_config;\" | grep -q \"^[1-9]\"; do sleep 5; done'"
       when: db_check.stdout == "0"
 
     - name: Update database with some correct values
-      command: sqlite3 /root/db/data.db "UPDATE o_v_client_config SET server_address = '{{ ansible_host_ip }}', port = 443, open_vpn_server_port = 443, o_v_client_group = 'nobody' WHERE profile = 'default';"
+      command: sqlite3 {{ ovpn_src}}/db/data.db "UPDATE o_v_client_config SET server_address = '{{ ansible_host_ip }}', port = 443, open_vpn_server_port = 443, o_v_client_group = 'nobody' WHERE profile = 'default';"
       when: db_check.stdout != "0"
-
-  handlers:
-    - name: Restart Docker Compose
-      community.docker.docker_compose_v2:
-        project_src: "{{ compose_file | dirname }}"
-        state: restarted
 
