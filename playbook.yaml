@@ -1,0 +1,149 @@
+
+---
+- name: Deploy OpenVPN WEB GUI with Docker Compose
+  hosts: ovpn_servers
+  become: true
+  vars:
+    compose_file: /root/openvpn-ui/docker-compose.yml
+
+  tasks:
+    - name: Install general prerequisites
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg-agent
+          - software-properties-common
+          - python3
+          - python3-pip
+        update_cache: yes
+      when: ansible_facts.packages['docker-ce'] is not defined
+
+    - name: Add Docker’s official GPG key
+      apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+
+    - name: Add Docker repository
+      apt_repository:
+        repo: deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable
+        state: present
+
+    - name: Install Docker Engine
+      apt:
+        name: docker-ce
+        update_cache: yes
+        state: latest
+
+    - name: Install Docker module for Python
+      ansible.builtin.pip:
+        name: 
+          - "docker==6.1.3"
+          - "docker-compose"
+        state: present
+
+    - name: Ensure Docker service is started
+      systemd:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Check if OpenVPN credentials exist in /root/.bashrc
+      command: grep "OpenVPN Admin Credentials" /root/.bashrc
+      register: bashrc_credentials
+      ignore_errors: true
+
+    - name: Generate random username and password
+      set_fact:
+        openvpn_admin_username: "admin_{{ 9999 | random }}"
+        openvpn_admin_password: "{{ lookup('password', '/dev/null length=32 chars=ascii_letters') }}"
+      when: bashrc_credentials.rc != 0
+
+    - name: Gather host IP
+      set_fact:
+        ansible_host_ip: "{{ ansible_default_ipv4.address }}"
+
+    - name: Create openvpn-ui folder
+      file:
+        path: /root/openvpn-ui
+        state: directory
+        
+    - name: Copy Docker Compose file
+      template:
+        src: ./templates/docker-compose.yml.j2
+        dest: "{{ compose_file }}"
+      when: bashrc_credentials.rc != 0
+      notify: Restart Docker Compose
+
+    - name: Touch fw-rules.sh file
+      file:
+        path: ./fw-rules.sh
+        state: touch
+
+    - name: Copy server.conf 
+      template:
+        src: ./templates/openvpn-server.conf.j2
+        dest: /root/server.conf
+
+    - name: Add OpenVPN credentials to /root/.bashrc
+      lineinfile:
+        path: /root/.bashrc
+        line: |
+          echo "OpenVPN Admin Credentials"
+          echo "Username: {{ openvpn_admin_username }}"
+          echo "Password: {{ openvpn_admin_password }}"
+          echo "To remove this msg, remove the lines in ~/.bashrc"
+      when: bashrc_credentials.rc != 0
+        
+
+    - name: Pull latest images and bring up services
+      community.docker.docker_compose_v2:
+        project_src: "{{ compose_file | dirname }}"
+        pull: missing
+        recreate: auto
+      notify: Restart Docker Compose
+
+    - name: Copy easy-rsa vars before initializing PKI
+      community.docker.docker_container_exec:
+        container: openvpn-ui
+        command: cp /etc/openvpn/pki/vars /etc/openvpn/config/easy-rsa.vars
+
+    - name: Ensure SQLite3 is installed
+      apt:
+        name: sqlite3
+        state: present
+        update_cache: yes
+        
+    - name: Check if database file exists
+      stat:
+        path: /root/db/data.db
+      register: db_file
+
+    - name: Wait for the database file to be created and populated
+      wait_for:
+        path: /root/db/data.db
+        state: present
+        timeout: 300
+      when: not db_file.stat.exists
+
+
+    - name: Check if database is populated
+      command: "sqlite3 /root/db/data.db 'SELECT count(*) FROM o_v_client_config;'"
+      register: db_check
+      changed_when: db_check.stdout == "0"
+
+    - name: Wait for the database to be populated
+      command: "sh -c 'while ! sqlite3 /root/db/data.db \"SELECT count(*) FROM o_v_client_config;\" | grep -q \"^[1-9]\"; do sleep 5; done'"
+      when: db_check.stdout == "0"
+
+    - name: Update database with some correct values
+      command: sqlite3 /root/db/data.db "UPDATE o_v_client_config SET server_address = '{{ ansible_host_ip }}', port = 443, open_vpn_server_port = 443, o_v_client_group = 'nobody' WHERE profile = 'default';"
+      when: db_check.stdout != "0"
+
+  handlers:
+    - name: Restart Docker Compose
+      community.docker.docker_compose_v2:
+        project_src: "{{ compose_file | dirname }}"
+        state: restarted
+

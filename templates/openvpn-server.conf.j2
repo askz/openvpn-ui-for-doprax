@@ -1,0 +1,58 @@
+
+management 0.0.0.0 2080  # Don't change this line. OpenVPN UI uses this feature to manage the server 
+
+dev tun
+port 1194
+proto udp
+
+topology subnet
+keepalive 10 120
+max-clients 100
+
+persist-key
+persist-tun
+explicit-exit-notify 1
+
+user nobody
+group nogroup
+
+client-config-dir /etc/openvpn/staticclients
+ifconfig-pool-persist pki/ipp.txt
+
+ca pki/ca.crt
+cert pki/issued/server.crt
+key pki/private/server.key
+crl-verify pki/crl.pem
+dh pki/dh.pem
+
+tls-crypt pki/ta.key
+tls-version-min 1.2
+remote-cert-tls client
+
+cipher AES-256-GCM
+# ncp-ciphers AES-256-GCM:AES-192-GCM:AES-128-GCM   # Deprecated since ver. 0.9.3. We have to use data-ciphers below instead
+data-ciphers AES-256-GCM:AES-192-GCM:AES-128-GCM
+
+auth SHA512
+
+server 10.0.70.0 255.255.255.0           # Trusted VPN subnet
+route 10.0.71.0 255.255.255.0            # Route to Guest VPN subnet
+push "route 10.0.60.0 255.255.255.0"     # Route to Home VPN subnet
+push "dhcp-option DNS 8.8.8.8"             # DNS1 server for VPN clients
+push "dhcp-option DNS 1.0.0.1"             # DNS2 server for VPN clients
+push "redirect-gateway def1 bypass-dhcp"    # Redirect gateway for VPN clients
+
+log /var/log/openvpn/openvpn.log
+verb 3
+status /var/log/openvpn/openvpn-status.log
+status-version 2
+
+ 
+ 
+
+# Custom Option One
+# Custom Option Two
+# client-to-client
+# Custom Option Three
+# push "route 0.0.0.0 255.255.255.255 net_gateway"
+# push block-outside-dns
