@@ -1,7 +1,7 @@
 
 # OpenVPN GUI Setup on Doprax
 
-This guide will help you set up and use the OpenVPN Web GUI on Doprax, 
+This guide will help you set up and use the OpenVPN Web GUI on [Doprax](https://www.doprax.com/r/askz/)
 
 ## Overview
 
